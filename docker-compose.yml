@@ -1,0 +1,60 @@
+x-app: &app
+  build: .
+  env_file: [.env.example]
+  environment: &app-env
+    DATABASE_URL: postgresql+psycopg://eve:eve@db:5432/eve
+    REDIS_URL: redis://redis:6379/0
+    # the mock provider calls our webhook by itself for PENDING payments (via the worker, with retries)
+    SIMULATE_PROVIDER_CALLBACK: "true"
+    WEBHOOK_TARGET_URL: http://api:8000/payments/webhook/
+  depends_on:
+    db: { condition: service_healthy }
+    redis: { condition: service_healthy }
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: eve
+      POSTGRES_PASSWORD: eve
+      POSTGRES_DB: eve
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U eve -d eve"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  api:
+    <<: *app
+    ports: ["8000:8000"]
+    # migrate -> seed (idempotent) -> serve
+    command: sh -c "alembic upgrade head && python -m app.seed && uvicorn app.main:app --host 0.0.0.0 --port 8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  worker:
+    <<: *app
+    command: celery -A app.worker.celery_app worker -l info -c 2
+    depends_on:
+      api: { condition: service_healthy }
+
+  beat:
+    <<: *app
+    command: celery -A app.worker.celery_app beat -l info
+    depends_on:
+      api: { condition: service_healthy }
+
+volumes:
+  pgdata:

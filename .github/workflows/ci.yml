@@ -1,0 +1,26 @@
+name: ci
+on: [push, pull_request]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping" --health-interval 5s --health-timeout 3s --health-retries 10
+      postgres:
+        image: postgres:16-alpine
+        env: { POSTGRES_USER: eve, POSTGRES_PASSWORD: eve, POSTGRES_DB: eve_migrations }
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U eve" --health-interval 5s --health-timeout 3s --health-retries 10
+    env:
+      REDIS_TEST_URL: redis://localhost:6379/15
+      MIGRATION_TEST_URL: postgresql+psycopg://eve:eve@localhost:5432/eve_migrations
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install -r requirements-dev.txt
+      - run: pytest   # SQLite for the API tests; real Redis + Postgres for the integration/migration tests
